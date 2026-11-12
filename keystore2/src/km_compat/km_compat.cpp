@@ -295,6 +295,17 @@ static KMV1::ErrorCode toErrorCode(const ScopedAStatus& status) {
     }
 }
 
+// Keymaster 4.x fixes the RSA-OAEP MGF1 digest to SHA-1. The legacy
+// conversion drops this KeyMint-only tag, so validate it before conversion
+// rather than silently accepting an authorization the HAL cannot enforce.
+static bool hasUnsupportedMgfDigest(const std::vector<KeyParameter>& params) {
+    return std::any_of(params.begin(), params.end(), [](const KeyParameter& param) {
+        return param.tag == Tag::RSA_OAEP_MGF_DIGEST &&
+               (param.value.getTag() != KeyParameterValue::Tag::digest ||
+                param.value.get<KeyParameterValue::Tag::digest>() != Digest::SHA1);
+    });
+}
+
 static std::vector<V4_0::KeyParameter>
 convertKeyParametersToLegacy(const std::vector<KeyParameter>& kps) {
     std::vector<V4_0::KeyParameter> legacyKps;
@@ -482,6 +493,10 @@ ScopedAStatus KeyMintDevice::generateKey(const std::vector<KeyParameter>& inKeyP
         }
     }
 
+    if (hasUnsupportedMgfDigest(inKeyParams)) {
+        return convertErrorCode(KMV1::ErrorCode::UNSUPPORTED_MGF_DIGEST);
+    }
+
     auto legacyKeyGenParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
     KMV1::ErrorCode errorCode;
 
@@ -549,6 +564,10 @@ ScopedAStatus KeyMintDevice::importKey(const std::vector<KeyParameter>& inKeyPar
             }
             return ret;
         }
+    }
+
+    if (hasUnsupportedMgfDigest(inKeyParams)) {
+        return convertErrorCode(KMV1::ErrorCode::UNSUPPORTED_MGF_DIGEST);
     }
 
     auto legacyKeyGENParams = convertKeyParametersToLegacy(extractGenerationParams(inKeyParams));
@@ -704,6 +723,10 @@ ScopedAStatus KeyMintDevice::beginInternal(KeyPurpose in_inPurpose,
     if (prefixedKeyBlobIsSoftKeyMint(prefixedKeyBlob)) {
         return softKeyMintDevice_->begin(in_inPurpose, in_inKeyBlob, in_inParams, in_inAuthToken,
                                          _aidl_return);
+    }
+
+    if (hasUnsupportedMgfDigest(in_inParams)) {
+        return convertErrorCode(KMV1::ErrorCode::UNSUPPORTED_MGF_DIGEST);
     }
 
     OperationSlot slot;
